@@ -1,0 +1,137 @@
+name: Build X RSS
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/15 * * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: dom, sqlite3, pdo_sqlite
+
+      - name: Create output directory
+        run: |
+          mkdir -p docs/feeds
+
+      - name: Start RSS server
+        run: |
+          php -S 127.0.0.1:8080 index.php > /tmp/xrss.log 2>&1 &
+          sleep 3
+
+      - name: Generate individual feeds
+        run: |
+          while read -r username; do
+            echo "Fetching $username"
+            curl --silent --show-error --location \
+              --max-time 45 \
+              --retry 2 \
+              "http://127.0.0.1:8080/?x=${username}&l=20" \
+              -o "docs/feeds/${username}.xml" || \
+              rm -f "docs/feeds/${username}.xml"
+          done < <(python3 -c '
+          import json
+          for x in json.load(open("accounts.json")):
+              print(x)
+          ')
+
+      - name: Build combined RSS
+        run: |
+          python3 <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from email.utils import parsedate_to_datetime
+
+          feed_dir = "docs/feeds"
+          items = []
+          seen = set()
+
+          for filename in os.listdir(feed_dir):
+              if not filename.endswith(".xml"):
+                  continue
+              if filename == "all.xml":
+                  continue
+
+              path = os.path.join(feed_dir, filename)
+
+              try:
+                  root = ET.parse(path).getroot()
+                  channel = root.find("channel")
+
+                  if channel is None:
+                      continue
+
+                  for item in channel.findall("item"):
+                      guid = item.findtext("guid") or item.findtext("link")
+
+                      if not guid:
+                          guid = ET.tostring(item, encoding="unicode")
+
+                      if guid in seen:
+                          continue
+
+                      seen.add(guid)
+                      items.append(item)
+
+              except Exception as e:
+                  print("Skipping", filename, e)
+
+          def sort_key(item):
+              value = item.findtext("pubDate") or ""
+              try:
+                  return parsedate_to_datetime(value)
+              except:
+                  return parsedate_to_datetime(
+                      "Thu, 01 Jan 1970 00:00:00 GMT"
+                  )
+
+          items.sort(key=sort_key, reverse=True)
+
+          rss = ET.Element("rss", {"version": "2.0"})
+          channel = ET.SubElement(rss, "channel")
+
+          ET.SubElement(channel, "title").text = "Combined X RSS"
+          ET.SubElement(channel, "description").text = "Combined RSS feed for X accounts"
+          ET.SubElement(channel, "link").text = "https://arashhashemzadeh123-cloud.github.io/-x-rss-feeds/feeds/all.xml"
+          ET.SubElement(channel, "generator").text = "X RSS Generator"
+
+          for item in items[:500]:
+              channel.append(item)
+
+          ET.indent(rss, space="  ")
+
+          tree = ET.ElementTree(rss)
+          tree.write(
+              os.path.join(feed_dir, "all.xml"),
+              encoding="utf-8",
+              xml_declaration=True
+          )
+
+          print("Combined items:", len(items))
+          PY
+
+      - name: Commit feeds
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add docs/feeds
+
+          if git diff --cached --quiet; then
+            echo "No feed changes"
+          else
+            git commit -m "Update X RSS feeds"
+            git push
+          fi
