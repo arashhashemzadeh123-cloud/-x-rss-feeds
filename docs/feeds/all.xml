@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<rss version="2.0">
+  <channel>
+    <title>Combined X RSS</title>
+    <description>Combined RSS feed for X accounts</description>
+    <link>https://arashhashemzadeh123-cloud.github.io/-x-rss-feeds/feeds/all.xml</link>
+    <generator>X RSS Generator</generator>
+  </channel>
+</rss>
